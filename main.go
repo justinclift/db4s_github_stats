@@ -120,9 +120,23 @@ func main() {
 	// Set up an automatic transaction roll back if the function exits without committing
 	defer tx.Rollback()
 
-	// Extract the asset download counts
+	// Add an entry for this timestamp to the database
 	dateStamp := time.Now().UTC()
-	if debug { fmt.Printf("Datestamp: %s\n", dateStamp.Format(time.RFC1123))}
+	dbQuery := `
+		INSERT INTO github_download_timestamps (count_timestamp)
+		VALUES ($1)`
+	commandTag, err := tx.Exec(dbQuery, dateStamp)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if numRows := commandTag.RowsAffected(); numRows != 1 {
+		log.Fatalf("Wrong number of rows affected (%d) when adding timestamp '%s'\n", numRows, dateStamp)
+	}
+
+	// Extract the asset download counts
+	if debug {
+		fmt.Printf("Datestamp: %s\n", dateStamp.Format(time.RFC1123))
+	}
 	for _, rel := range rels {
 
 		// Exclude the "continuous" release, as it's a moving point in time which has it's counter reset with every
@@ -144,7 +158,8 @@ func main() {
 			if numResults == 0 {
 				// Asset isn't yet in the database, so add it
 				dbQuery := `
-					INSERT INTO github_release_assets (asset_name) VALUES ($1)`
+					INSERT INTO github_release_assets (asset_name)
+					VALUES ($1)`
 				commandTag, err := tx.Exec(dbQuery, *asset.Name)
 				if err != nil {
 					log.Fatal(err)
@@ -155,10 +170,14 @@ func main() {
 			}
 
 			// Store the current download count of the asset in the database
-			if debug {  fmt.Printf("  * %s, downloads: %d\n", *asset.Name, *asset.DownloadCount) }
+			if debug {
+				fmt.Printf("  * %s, downloads: %d\n", *asset.Name, *asset.DownloadCount)
+			}
 			dbQuery = `
 					INSERT INTO github_download_counts (asset, count_timestamp, download_count)
-					VALUES ((SELECT asset_id FROM github_release_assets WHERE asset_name = $1), $2, $3)`
+					VALUES (
+						(SELECT asset_id FROM github_release_assets WHERE asset_name = $1),
+						(SELECT timestamp_id FROM github_download_timestamps WHERE count_timestamp = $2), $3)`
 			commandTag, err := tx.Exec(dbQuery, *asset.Name, dateStamp, *asset.DownloadCount)
 			if err != nil {
 				log.Fatal(err)
@@ -177,5 +196,7 @@ func main() {
 	}
 	pg.Close()
 
-	if debug { fmt.Println("Download counts updated") }
+	if debug {
+		fmt.Println("Download counts updated")
+	}
 }
