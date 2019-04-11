@@ -39,7 +39,7 @@ var (
 	Conf TomlConfig
 
 	// Show debugging info?
-	debug = true
+	debug = false
 
 	// PostgreSQL connection pool handle
 	pg *pgx.ConnPool
