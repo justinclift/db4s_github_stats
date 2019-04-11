@@ -38,6 +38,9 @@ var (
 	// Application config
 	Conf TomlConfig
 
+	// Show debugging info?
+	debug = true
+
 	// PostgreSQL connection pool handle
 	pg *pgx.ConnPool
 )
@@ -118,18 +121,52 @@ func main() {
 	defer tx.Rollback()
 
 	// Extract the asset download counts
-	for _, j := range rels {
+	dateStamp := time.Now().UTC()
+	if debug { fmt.Printf("Datestamp: %s\n", dateStamp.Format(time.RFC1123))}
+	for _, rel := range rels {
 
 		// Exclude the "continuous" release, as it's a moving point in time which has it's counter reset with every
 		// commit to our main repo
-		if *j.Name == "continuous" {
+		if *rel.TagName == "continuous" {
 			continue
 		}
-		for _, l := range j.Assets {
-			// TODO: Check if this Asset is already known
+		for _, asset := range rel.Assets {
+			// Check if this asset is in the database
+			dbQuery := `
+				SELECT count(*)
+				FROM github_release_assets
+				WHERE asset_name = $1`
+			var numResults int
+			err = tx.QueryRow(dbQuery, *asset.Name).Scan(&numResults)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if numResults == 0 {
+				// Asset isn't yet in the database, so add it
+				dbQuery := `
+					INSERT INTO github_release_assets (asset_name) VALUES ($1)`
+				commandTag, err := tx.Exec(dbQuery, *asset.Name)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if numRows := commandTag.RowsAffected(); numRows != 1 {
+					log.Fatalf("Wrong number of rows affected (%d) when adding asset '%s'\n", numRows, *asset.Name)
+				}
+			}
 
-			// TODO: Store the download count for the asset in the database
-			fmt.Printf("Asset: %s, downloads: %d\n", *l.Name, *l.DownloadCount)
+			// Store the current download count of the asset in the database
+			if debug {  fmt.Printf("  * %s, downloads: %d\n", *asset.Name, *asset.DownloadCount) }
+			dbQuery = `
+					INSERT INTO github_download_counts (asset, count_timestamp, download_count)
+					VALUES ((SELECT asset_id FROM github_release_assets WHERE asset_name = $1), $2, $3)`
+			commandTag, err := tx.Exec(dbQuery, *asset.Name, dateStamp, *asset.DownloadCount)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if numRows := commandTag.RowsAffected(); numRows != 1 {
+				log.Fatalf("Wrong number of rows affected (%d) when adding asset '%s'\n", numRows, *asset.Name)
+			}
+
 		}
 	}
 
@@ -139,5 +176,6 @@ func main() {
 		log.Fatal(err)
 	}
 	pg.Close()
-	fmt.Println("Download counts updated")
+
+	if debug { fmt.Println("Download counts updated") }
 }
